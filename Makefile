@@ -11,11 +11,12 @@ ifneq ($(KERNELRELEASE),)
 		sgx_le.o
 	obj-m += isgx.o
 else
-KDIR := /lib/modules/$(shell uname -r)/build
+KVER ?= $(shell uname -r)
+KDIR := /lib/modules/$(KVER)/build
 PWD  := $(shell pwd)
 
 default:
-	$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) AFLAGS_MODULE="-I$(PWD)" modules
+	$(MAKE) -C $(KDIR) M=$(PWD) AFLAGS_MODULE="-I$(PWD)" modules
 
 install: default
 	$(MAKE) INSTALL_MOD_DIR=kernel/drivers/intel/sgx -C $(KDIR) M=$(PWD) modules_install
@@ -24,4 +25,4 @@ install: default
 endif
 
 clean:
-	rm -vrf *.o *.ko *.order *.symvers *.mod.c .tmp_versions .*o.cmd
+	rm -vrf *.o *.ko *.order *.symvers *.mod.c .tmp_versions .*o.cmd *.o.ur-safe
