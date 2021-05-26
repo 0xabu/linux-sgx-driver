@@ -70,7 +70,6 @@
 #include <linux/hashtable.h>
 #include <linux/kthread.h>
 #include <linux/platform_device.h>
-#include "sgx_le_ss.h"
 
 #define DRV_DESCRIPTION "Intel SGX Driver"
 #define DRV_VERSION "2.5.0"
@@ -125,7 +124,6 @@ u32 sgx_misc_reserved;
 u32 sgx_xsave_size_tbl[64];
 bool sgx_has_sgx2;
 bool sgx_unlocked_msrs;
-u64 sgx_le_pubkeyhash[4];
 
 // From intel_sgx.c
 bool sgx_enabled = false;
@@ -207,23 +205,11 @@ static int sgx_init(void)
 
 static int sgx_open(struct inode *inode, struct file *file)
 {
-	int ret;
-
-	ret = sgx_le_start(&sgx_le_ctx);
-
-	if (!ret)
-		file->private_data = &sgx_le_ctx;
-
-	return ret;
+	return 0;
 }
 
 static int sgx_release(struct inode *inode, struct file *file)
 {
-	if (!file->private_data)
-		return 0;
-
-	sgx_le_stop(file->private_data, true);
-
 	return 0;
 }
 
@@ -303,7 +289,6 @@ static int sgx_pm_suspend(struct device *dev)
 	struct sgx_tgid_ctx *ctx;
 	struct sgx_encl *encl;
 
-	sgx_le_stop(&sgx_le_ctx, false);
 	list_for_each_entry(ctx, &sgx_tgid_ctx_list, list) {
 		list_for_each_entry(encl, &ctx->encl_list, encl_list) {
 			sgx_invalidate(encl, false);
@@ -319,36 +304,17 @@ static SIMPLE_DEV_PM_OPS(sgx_drv_pm, sgx_pm_suspend, NULL);
 
 static int sgx_init_msrs(void)
 {
-	struct sgx_sigstruct *sgx_le_ss_p = (struct sgx_sigstruct *)sgx_le_ss;
 	unsigned long fc = 0;
-	u64 msrs[4] = {0};
-	int ret;
 
 	rdmsrl(MSR_IA32_FEATURE_CONTROL, fc);
 	if (fc & FEATURE_CONTROL_SGX_LE_WR)
 		sgx_unlocked_msrs = true;
 
-	ret = sgx_get_key_hash_simple(sgx_le_ss_p->modulus, sgx_le_pubkeyhash);
-	if (ret)
-		return ret;
-
 	if (sgx_unlocked_msrs)
 		return 0;
 
-	rdmsrl(MSR_IA32_SGXLEPUBKEYHASH0, msrs[0]);
-	rdmsrl(MSR_IA32_SGXLEPUBKEYHASH1, msrs[1]);
-	rdmsrl(MSR_IA32_SGXLEPUBKEYHASH2, msrs[2]);
-	rdmsrl(MSR_IA32_SGXLEPUBKEYHASH3, msrs[3]);
-
-	if ((sgx_le_pubkeyhash[0] != msrs[0]) ||
-	    (sgx_le_pubkeyhash[1] != msrs[1]) ||
-	    (sgx_le_pubkeyhash[2] != msrs[2]) ||
-	    (sgx_le_pubkeyhash[3] != msrs[3])) {
-		pr_err("IA32_SGXLEPUBKEYHASHn MSRs do not match to the launch enclave signing key\n");
-		return -ENODEV;
-	}
-
-	return 0;
+	pr_err("IA32_SGXLEPUBKEYHASHn MSRs are locked\n");
+	return -ENODEV;
 }
 
 static int sgx_dev_init(struct device *parent)
@@ -433,20 +399,14 @@ static int sgx_dev_init(struct device *parent)
 		goto out_iounmap;
 	}
 
-	ret = sgx_le_init(&sgx_le_ctx);
-	if (ret)
-		goto out_workqueue;
-
 	sgx_dev.parent = parent;
 	ret = misc_register(&sgx_dev);
 	if (ret) {
 		pr_err("intel_sgx: misc_register() failed\n");
-		goto out_le;
+		goto out_workqueue;
 	}
 
 	return 0;
-out_le:
-	sgx_le_exit(&sgx_le_ctx);
 out_workqueue:
 	destroy_workqueue(sgx_add_page_wq);
 out_iounmap:
@@ -484,7 +444,6 @@ static int sgx_drv_remove(struct platform_device *pdev)
 
 	misc_deregister(&sgx_dev);
 
-	sgx_le_exit(&sgx_le_ctx);
 	destroy_workqueue(sgx_add_page_wq);
 #ifdef CONFIG_X86_64
 	for (i = 0; i < sgx_nr_epc_banks; i++)
